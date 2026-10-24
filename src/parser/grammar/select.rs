@@ -466,6 +466,7 @@ fn parse_select_clause(p: &mut Parser) {
                 }
                 first = false;
                 parse_expression(p);
+                parse_optional_explicit_alias(p);
             }
             p.expect(SyntaxKind::ClosingRoundBracket);
         }
@@ -617,6 +618,24 @@ fn parse_optional_column_alias(p: &mut Parser) {
     {
         let m = p.start();
         p.advance();
+        p.complete(m, SyntaxKind::ColumnAlias);
+    }
+}
+
+/// Parses an optional `AS name` after an item of a list where ClickHouse
+/// accepts only the explicit form (`ParserExpressionWithOptionalAlias(false)`):
+/// GROUP BY, GROUPING SETS, LIMIT BY, DISTINCT ON and ORDER BY items. The
+/// alias is query-wide, so `GROUP BY f(x) AS k` may be read as `k` in WHERE.
+/// Any keyword is a valid alias after an explicit `AS`.
+fn parse_optional_explicit_alias(p: &mut Parser) {
+    if p.at_keyword(Keyword::As) {
+        let m = p.start();
+        p.advance(); // consume AS
+        if p.at_identifier() {
+            p.advance();
+        } else {
+            p.recover_with_error("Expected alias after AS");
+        }
         p.complete(m, SyntaxKind::ColumnAlias);
     }
 }
@@ -904,6 +923,7 @@ fn parse_group_by_clause(p: &mut Parser) {
             }
             first = false;
             parse_expression(p);
+            parse_optional_explicit_alias(p);
         }
 
         // WITH TOTALS | WITH ROLLUP | WITH CUBE
@@ -948,6 +968,7 @@ fn parse_grouping_sets(p: &mut Parser) {
             }
             first_expr = false;
             parse_expression(p);
+            parse_optional_explicit_alias(p);
         }
         p.expect(SyntaxKind::ClosingRoundBracket);
         p.complete(set_m, SyntaxKind::GroupingSet);
@@ -1082,20 +1103,9 @@ fn parse_order_by_item(p: &mut Parser) {
         parse_expression(p);
     }
 
-    // Optional alias: AS identifier
-    // ClickHouse allows aliases in ORDER BY items: ORDER BY expr AS alias
-    // Must check before ASC/DESC since AS is unambiguous here — any keyword
-    // is a valid alias after an explicit AS.
-    if p.at_keyword(Keyword::As) {
-        let am = p.start();
-        p.advance(); // consume AS
-        if p.at_identifier() {
-            p.advance();
-        } else {
-            p.recover_with_error("Expected alias after AS");
-        }
-        p.complete(am, SyntaxKind::ColumnAlias);
-    }
+    // ClickHouse allows aliases in ORDER BY items: ORDER BY expr AS alias.
+    // Must check before ASC/DESC.
+    parse_optional_explicit_alias(p);
 
     // ASC or DESC
     if p.at_keyword(Keyword::Asc) || p.at_keyword(Keyword::Desc) {
@@ -1266,6 +1276,7 @@ fn parse_limit_or_limit_by(p: &mut Parser) {
             }
             first = false;
             parse_expression(p);
+            parse_optional_explicit_alias(p);
         }
         p.complete(m, SyntaxKind::LimitByClause);
     } else if p.at(SyntaxKind::Comma) {
@@ -1679,6 +1690,196 @@ mod tests {
                   'BY'
                   ColumnReference
                     'a'
+        "#]]);
+    }
+
+    #[test]
+    fn group_by_item_alias() {
+        check("SELECT k FROM t WHERE k != '' GROUP BY lower(s) AS k, x", expect![[r#"
+            File
+              SelectStatement
+                SelectClause
+                  'SELECT'
+                  ColumnList
+                    ColumnReference
+                      'k'
+                FromClause
+                  'FROM'
+                  TableIdentifier
+                    't'
+                WhereClause
+                  'WHERE'
+                  BinaryExpression
+                    ColumnReference
+                      'k'
+                    '!='
+                    StringLiteral
+                      ''''
+                GroupByClause
+                  'GROUP'
+                  'BY'
+                  FunctionCall
+                    Identifier
+                      'lower'
+                    ExpressionList
+                      '('
+                      Expression
+                        ColumnReference
+                          's'
+                      ')'
+                  ColumnAlias
+                    'AS'
+                    'k'
+                  ','
+                  ColumnReference
+                    'x'
+        "#]]);
+    }
+
+    #[test]
+    fn group_by_item_alias_may_be_a_keyword() {
+        check("SELECT format FROM t GROUP BY lower(s) AS format WITH TOTALS", expect![[r#"
+            File
+              SelectStatement
+                SelectClause
+                  'SELECT'
+                  ColumnList
+                    ColumnReference
+                      'format'
+                FromClause
+                  'FROM'
+                  TableIdentifier
+                    't'
+                GroupByClause
+                  'GROUP'
+                  'BY'
+                  FunctionCall
+                    Identifier
+                      'lower'
+                    ExpressionList
+                      '('
+                      Expression
+                        ColumnReference
+                          's'
+                      ')'
+                  ColumnAlias
+                    'AS'
+                    'format'
+                  'WITH'
+                  'TOTALS'
+        "#]]);
+    }
+
+    #[test]
+    fn grouping_sets_item_alias() {
+        check("SELECT a FROM t GROUP BY GROUPING SETS ((lower(s) AS a), (b))", expect![[r#"
+            File
+              SelectStatement
+                SelectClause
+                  'SELECT'
+                  ColumnList
+                    ColumnReference
+                      'a'
+                FromClause
+                  'FROM'
+                  TableIdentifier
+                    't'
+                GroupByClause
+                  'GROUP'
+                  'BY'
+                  GroupingSetsClause
+                    'GROUPING'
+                    'SETS'
+                    '('
+                    GroupingSet
+                      '('
+                      FunctionCall
+                        Identifier
+                          'lower'
+                        ExpressionList
+                          '('
+                          Expression
+                            ColumnReference
+                              's'
+                          ')'
+                      ColumnAlias
+                        'AS'
+                        'a'
+                      ')'
+                    ','
+                    GroupingSet
+                      '('
+                      ColumnReference
+                        'b'
+                      ')'
+                    ')'
+        "#]]);
+    }
+
+    #[test]
+    fn limit_by_item_alias() {
+        check("SELECT a FROM t LIMIT 1 BY lower(s) AS a", expect![[r#"
+            File
+              SelectStatement
+                SelectClause
+                  'SELECT'
+                  ColumnList
+                    ColumnReference
+                      'a'
+                FromClause
+                  'FROM'
+                  TableIdentifier
+                    't'
+                LimitByClause
+                  'LIMIT'
+                  NumberLiteral
+                    '1'
+                  'BY'
+                  FunctionCall
+                    Identifier
+                      'lower'
+                    ExpressionList
+                      '('
+                      Expression
+                        ColumnReference
+                          's'
+                      ')'
+                  ColumnAlias
+                    'AS'
+                    'a'
+        "#]]);
+    }
+
+    #[test]
+    fn distinct_on_item_alias() {
+        check("SELECT DISTINCT ON (lower(s) AS a) b FROM t", expect![[r#"
+            File
+              SelectStatement
+                SelectClause
+                  'SELECT'
+                  'DISTINCT'
+                  'ON'
+                  '('
+                  FunctionCall
+                    Identifier
+                      'lower'
+                    ExpressionList
+                      '('
+                      Expression
+                        ColumnReference
+                          's'
+                      ')'
+                  ColumnAlias
+                    'AS'
+                    'a'
+                  ')'
+                  ColumnList
+                    ColumnReference
+                      'b'
+                FromClause
+                  'FROM'
+                  TableIdentifier
+                    't'
         "#]]);
     }
 

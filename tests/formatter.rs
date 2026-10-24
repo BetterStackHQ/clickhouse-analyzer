@@ -145,6 +145,44 @@ fn group_by_multiple() {
 }
 
 #[test]
+fn group_by_item_alias_single() {
+    check_format("select k from t group by lower(s) as k", expect![[r#"
+        SELECT
+            k
+        FROM t
+        GROUP BY lower(s) AS k
+    "#]]);
+}
+
+#[test]
+fn group_by_item_alias_multiple() {
+    check_format("select k, x from t group by lower(s) as k, x", expect![[r#"
+        SELECT
+            k,
+            x
+        FROM t
+        GROUP BY
+            lower(s) AS k,
+            x
+    "#]]);
+}
+
+#[test]
+fn limit_by_and_distinct_on_item_alias() {
+    check_format("select distinct on (lower(s) as a) b from t limit 1 by lower(s) as c", expect![[r#"
+        SELECT DISTINCT ON (lower(s) AS a)
+            b
+        FROM t
+        LIMIT 1 BY lower(s) AS c
+    "#]]);
+}
+
+#[test]
+fn item_aliases_outside_select_list_idempotent() {
+    check_idempotent("select distinct on (lower(s) as a) b from t group by lower(s) as k, x limit 1 by lower(s) as c");
+}
+
+#[test]
 fn order_by_single() {
     check_format(
         "select a from t order by a desc",

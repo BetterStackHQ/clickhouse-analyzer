@@ -444,6 +444,11 @@ fn format_select_clause(tree: &SyntaxTree, ctx: &mut FormatterContext) {
                 format_node(subtree, ctx);
                 ctx.dedent();
             }
+            // The `AS alias` of a DISTINCT ON item.
+            SyntaxChild::Tree(subtree) if subtree.kind == SyntaxKind::ColumnAlias => {
+                ctx.write_space();
+                format_node(subtree, ctx);
+            }
             SyntaxChild::Tree(subtree) => {
                 format_node(subtree, ctx);
             }
@@ -494,9 +499,10 @@ fn format_group_by_clause(tree: &SyntaxTree, ctx: &mut FormatterContext) {
         matches!(c, SyntaxChild::Tree(t) if t.kind == SyntaxKind::GroupByList)
     });
     let direct_item_count = if !has_list {
+        // An item's `AS alias` belongs to that item; it is not another item.
         tree.children
             .iter()
-            .filter(|c| matches!(c, SyntaxChild::Tree(_)))
+            .filter(|c| matches!(c, SyntaxChild::Tree(t) if t.kind != SyntaxKind::ColumnAlias))
             .count()
     } else {
         0
@@ -537,6 +543,10 @@ fn format_group_by_clause(tree: &SyntaxTree, ctx: &mut FormatterContext) {
                 } else {
                     format_node(subtree, ctx);
                 }
+            }
+            SyntaxChild::Tree(subtree) if subtree.kind == SyntaxKind::ColumnAlias => {
+                ctx.write_space();
+                format_node(subtree, ctx);
             }
             SyntaxChild::Tree(subtree) => {
                 if !after_keywords && multi_item {

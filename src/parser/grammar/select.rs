@@ -944,7 +944,10 @@ fn parse_group_by_clause(p: &mut Parser) {
     p.complete(m, SyntaxKind::GroupByClause);
 }
 
-/// Parses: GROUPING SETS ((expr, ...), (expr, ...), ...)
+/// Parses: GROUPING SETS ((expr, ...), expr, ...)
+///
+/// As in the server's ParserGroupingSetsExpressionListElements, an element
+/// that does not open with `(` is a single expression forming a set of one.
 fn parse_grouping_sets(p: &mut Parser) {
     let m = p.start();
     p.expect_keyword(Keyword::Grouping);
@@ -958,8 +961,15 @@ fn parse_grouping_sets(p: &mut Parser) {
         }
         first = false;
 
-        // Each grouping set is a parenthesized list of expressions (can be empty)
         let set_m = p.start();
+        if !p.at(SyntaxKind::OpeningRoundBracket) {
+            parse_expression(p);
+            parse_optional_explicit_alias(p);
+            p.complete(set_m, SyntaxKind::GroupingSet);
+            continue;
+        }
+
+        // A parenthesized list of expressions (can be empty)
         p.expect(SyntaxKind::OpeningRoundBracket);
         let mut first_expr = true;
         while !p.eof() && !p.at(SyntaxKind::ClosingRoundBracket) {
@@ -1253,6 +1263,7 @@ fn at_order_by_terminator(p: &mut Parser) -> bool {
 
 /// Parses LIMIT, detecting whether it's LIMIT BY or plain LIMIT.
 /// LIMIT n [OFFSET m] BY expr, ... => LimitByClause
+/// LIMIT m, n BY expr, ...          => LimitByClause
 /// LIMIT n [OFFSET m]              => LimitClause
 /// LIMIT m, n                      => LimitClause
 fn parse_limit_or_limit_by(p: &mut Parser) {
@@ -1260,8 +1271,8 @@ fn parse_limit_or_limit_by(p: &mut Parser) {
     p.expect_keyword(Keyword::Limit);
     parse_expression(p);
 
-    // Check for OFFSET before BY
-    if p.at_keyword(Keyword::Offset) {
+    // `OFFSET m` or the `m, n` form, either of which may precede BY.
+    if p.at_keyword(Keyword::Offset) || p.at(SyntaxKind::Comma) {
         p.advance();
         parse_expression(p);
     }
@@ -1279,16 +1290,6 @@ fn parse_limit_or_limit_by(p: &mut Parser) {
             parse_optional_explicit_alias(p);
         }
         p.complete(m, SyntaxKind::LimitByClause);
-    } else if p.at(SyntaxKind::Comma) {
-        // LIMIT m, n syntax (offset, count)
-        p.advance(); // consume comma
-        parse_expression(p);
-        // WITH TIES
-        if p.at_keyword(Keyword::With) && p.nth_keyword(1, Keyword::Ties) {
-            p.advance(); // consume WITH
-            p.expect_keyword(Keyword::Ties); // consume TIES (skips trivia)
-        }
-        p.complete(m, SyntaxKind::LimitClause);
     } else {
         // WITH TIES — consume both tokens if present
         if p.at_keyword(Keyword::With) && p.nth_keyword(1, Keyword::Ties) {
@@ -1847,6 +1848,83 @@ mod tests {
                   ColumnAlias
                     'AS'
                     'a'
+        "#]]);
+    }
+
+    #[test]
+    fn limit_offset_comma_by() {
+        check("SELECT a FROM t LIMIT 1, 2 BY lower(s) AS k", expect![[r#"
+            File
+              SelectStatement
+                SelectClause
+                  'SELECT'
+                  ColumnList
+                    ColumnReference
+                      'a'
+                FromClause
+                  'FROM'
+                  TableIdentifier
+                    't'
+                LimitByClause
+                  'LIMIT'
+                  NumberLiteral
+                    '1'
+                  ','
+                  NumberLiteral
+                    '2'
+                  'BY'
+                  FunctionCall
+                    Identifier
+                      'lower'
+                    ExpressionList
+                      '('
+                      Expression
+                        ColumnReference
+                          's'
+                      ')'
+                  ColumnAlias
+                    'AS'
+                    'k'
+        "#]]);
+    }
+
+    #[test]
+    fn grouping_sets_bare_element() {
+        check("SELECT a FROM t GROUP BY GROUPING SETS (a AS x, (b, c))", expect![[r#"
+            File
+              SelectStatement
+                SelectClause
+                  'SELECT'
+                  ColumnList
+                    ColumnReference
+                      'a'
+                FromClause
+                  'FROM'
+                  TableIdentifier
+                    't'
+                GroupByClause
+                  'GROUP'
+                  'BY'
+                  GroupingSetsClause
+                    'GROUPING'
+                    'SETS'
+                    '('
+                    GroupingSet
+                      ColumnReference
+                        'a'
+                      ColumnAlias
+                        'AS'
+                        'x'
+                    ','
+                    GroupingSet
+                      '('
+                      ColumnReference
+                        'b'
+                      ','
+                      ColumnReference
+                        'c'
+                      ')'
+                    ')'
         "#]]);
     }
 

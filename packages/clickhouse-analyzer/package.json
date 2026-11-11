@@ -26,7 +26,7 @@
         "build:ts": "tsc",
         "build": "npm run build:wasm && npm run build:ts",
         "build:test": "tsc -p tsconfig.test.json",
-        "test": "npm run build:test && node --test dist-test/test.js",
+        "test": "npm run build:ts && npm run build:test && node --test dist-test/test.js",
         "clean": "rm -rf dist dist-test pkg"
     },
     "keywords": [

@@ -200,15 +200,16 @@ const colDefs = result.findAll(SyntaxKind.ColumnDefinition).map(col => {
 
 ### Node.js usage
 
-The library targets `--target web` (browser). In Node.js, use `initSync` with the WASM bytes directly:
+The library targets `--target web` (browser). In Node.js ES modules, resolve the exported WASM file and pass its bytes to the public `init()` function:
 
 ```typescript
-import { readFileSync } from 'fs';
-import { initSync } from '@clickhouse/analyzer/pkg/clickhouse_analyzer.js';
-import { parse } from '@clickhouse/analyzer';
+import { readFileSync } from 'node:fs';
+import { init, parse } from '@clickhouse/analyzer';
 
-const wasm = readFileSync('node_modules/@clickhouse/analyzer/pkg/clickhouse_analyzer_bg.wasm');
-initSync({ module: new WebAssembly.Module(wasm) });
+const wasm = readFileSync(new URL(import.meta.resolve('@clickhouse/analyzer/wasm')));
+await init({ module_or_path: wasm });
 
 const result = parse('SELECT 1');
 ```
+
+Passing bytes avoids fetching a local file URL. Using `init()` initializes both WASM and the TypeScript wrapper.

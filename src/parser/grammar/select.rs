@@ -875,7 +875,7 @@ fn parse_join_clause(p: &mut Parser) {
         parse_expression(p);
     } else if p.at_keyword(Keyword::Using) {
         p.advance();
-        // USING (col, col) or USING col
+        // USING (col, col) or USING col, col
         if p.at(SyntaxKind::OpeningRoundBracket) {
             p.advance(); // consume (
             let mut first = true;
@@ -888,8 +888,11 @@ fn parse_join_clause(p: &mut Parser) {
             }
             p.expect(SyntaxKind::ClosingRoundBracket);
         } else {
-            // USING col (without parens)
+            // USING col, col (without parens)
             parse_expression(p);
+            while p.eat(SyntaxKind::Comma) {
+                parse_expression(p);
+            }
         }
     }
     // CROSS JOIN has no constraint

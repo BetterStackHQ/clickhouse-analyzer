@@ -2562,8 +2562,86 @@ fn explain_in_subquery() {
 }
 
 // ---------------------------------------------------------------------------
-// Comma-join syntax
+// JOIN USING lists and comma joins
 // ---------------------------------------------------------------------------
+
+#[test]
+fn join_using_lists_keep_keys_in_join_clause() {
+    for (using, expected_keys) in [
+        ("x, y", vec!["x", "y"]),
+        ("x, y, z", vec!["x", "y", "z"]),
+        ("x", vec!["x"]),
+        ("(x, y)", vec!["x", "y"]),
+    ] {
+        let input = format!("SELECT * FROM a JOIN b USING {using} WHERE x > 0 ORDER BY x");
+        let result = parse(&input);
+        assert!(result.errors.is_empty(), "{input}: {:?}", result.errors);
+
+        let statement = result
+            .tree
+            .children
+            .iter()
+            .find_map(|child| child.get_tree_with_kind(SyntaxKind::SelectStatement))
+            .expect("SELECT statement");
+        let join = statement
+            .children
+            .iter()
+            .find_map(|child| child.get_tree_with_kind(SyntaxKind::JoinClause))
+            .expect("JOIN clause");
+        let keys: Vec<_> = join
+            .children
+            .iter()
+            .filter_map(|child| child.get_tree_with_kind(SyntaxKind::ColumnReference))
+            .map(|key| result.source[key.start as usize..key.end as usize].trim())
+            .collect();
+        assert_eq!(keys, expected_keys, "{input}");
+        for kind in [SyntaxKind::WhereClause, SyntaxKind::OrderByClause] {
+            assert!(
+                statement
+                    .children
+                    .iter()
+                    .any(|child| child.get_tree_with_kind(kind).is_some()),
+                "{kind:?} must remain outside the JOIN: {input}"
+            );
+        }
+        assert_eq!(collect_text(&result.tree, &result.source), input);
+    }
+}
+
+#[test]
+fn join_using_bare_list_boundaries() {
+    for input in [
+        "SELECT * FROM a JOIN b USING x, y",
+        "SELECT * FROM a JOIN b USING x, y WHERE x > 0 GROUP BY x, y ORDER BY y LIMIT 1",
+        "SELECT * FROM a JOIN b USING x, y JOIN c USING z",
+        "SELECT * FROM (SELECT * FROM a JOIN b USING x, y) AS q",
+        "SELECT * FROM a JOIN b USING x, y UNION ALL SELECT * FROM c",
+        "SELECT * FROM a JOIN b USING x, y; SELECT 1",
+        "SELECT * FROM a JOIN b USING x, /* next key */ y",
+        "SELECT * FROM a JOIN b USING x, tuple(y, z)",
+    ] {
+        let result = parse(input);
+        assert!(result.errors.is_empty(), "{input}: {:?}", result.errors);
+        assert_eq!(collect_text(&result.tree, &result.source), input);
+    }
+}
+
+#[test]
+fn join_using_bare_list_requires_item_after_comma() {
+    for input in [
+        "SELECT * FROM a JOIN b USING x,",
+        "SELECT * FROM a JOIN b USING x,;",
+        "SELECT * FROM a JOIN b USING x,, y",
+        "SELECT * FROM a JOIN b USING x, WHERE x > 0",
+    ] {
+        let result = parse(input);
+        assert!(
+            !result.errors.is_empty(),
+            "Missing USING item must be diagnosed: {input}"
+        );
+        assert_eq!(collect_text(&result.tree, &result.source), input);
+    }
+}
 
 #[test]
 fn comma_join() {

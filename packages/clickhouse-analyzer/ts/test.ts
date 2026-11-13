@@ -1,36 +1,46 @@
 import { describe, it, before } from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
-import { SyntaxKind } from "./syntax-kind.js";
-import { buildParseResult, SyntaxNode } from "./parse.js";
 import {
+    init,
+    parse,
+    SyntaxKind,
+    SyntaxNode,
     extractTableNames,
     extractColumnReferences,
     extractFunctionCalls,
     getStatementType,
-} from "./helpers.js";
-import type { RawParseResult } from "./types.js";
+} from "./index.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = join(__dirname, "..");
 
-// We can't use the init() wrapper in Node (it uses fetch), so we load WASM
-// manually with initSync and call parse_sql directly.
-let parseSql: (sql: string) => string;
-
-function parse(sql: string) {
-    const raw: RawParseResult = JSON.parse(parseSql(sql));
-    return buildParseResult(raw);
-}
-
 before(async () => {
-    const wasmBytes = readFileSync(join(root, "pkg", "clickhouse_analyzer_bg.wasm"));
-    const pkg = await import(join(root, "pkg", "clickhouse_analyzer.js"));
-    pkg.initSync({ module: new WebAssembly.Module(wasmBytes) });
-    parseSql = pkg.parse_sql;
+    const wasmBytes = readFileSync(new URL(import.meta.resolve("@clickhouse/analyzer/wasm")));
+    await init({ module_or_path: wasmBytes });
+});
+
+describe("Node.js documentation", () => {
+    it("runs the README example through the public package exports", () => {
+        const readme = readFileSync(join(root, "..", "..", "README.md"), "utf8");
+        const section = readme.split("### Node.js usage")[1];
+        const example = section?.match(/```typescript\s*\n([\s\S]*?)```/)?.[1];
+        assert.ok(example, "README Node.js example must exist");
+
+        // A fresh process ensures no other test has already initialized WASM.
+        execFileSync(process.execPath, [
+            "--input-type=module",
+            "--eval",
+            `${example}\n` +
+                `import assert from 'node:assert/strict';\n` +
+                `assert.equal(result.ok, true);\n` +
+                `assert.equal(result.source, 'SELECT 1');\n`,
+        ], { cwd: root, stdio: "pipe", timeout: 10_000 });
+    });
 });
 
 // ---------------------------------------------------------------------------

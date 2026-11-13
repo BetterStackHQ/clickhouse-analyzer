@@ -891,6 +891,10 @@ fn parse_join_clause(p: &mut Parser) {
             // USING col, col (without parens)
             parse_expression(p);
             while p.eat(SyntaxKind::Comma) {
+                if at_missing_using_item(p) {
+                    p.recover_with_error("Expected expression after comma in USING");
+                    break;
+                }
                 parse_expression(p);
             }
         }
@@ -898,6 +902,55 @@ fn parse_join_clause(p: &mut Parser) {
     // CROSS JOIN has no constraint
 
     p.complete(m, SyntaxKind::JoinClause);
+}
+
+/// Keep a following clause or closing bracket available when a USING item is missing.
+fn at_missing_using_item(p: &mut Parser) -> bool {
+    if p.eof()
+        || p.end_of_statement()
+        || p.at(SyntaxKind::ClosingRoundBracket)
+        || at_recoverable_clause_start(p)
+    {
+        return true;
+    }
+    if !at_clause_keyword(p) {
+        return false;
+    }
+
+    // Keywords may be column names: `USING x, where ORDER BY x` is valid.
+    // Two adjacent operands (`WHERE x`) instead identify a following clause.
+    let next_is_clause = SELECT_CLAUSE_KEYWORDS
+        .iter()
+        .chain(
+            [
+                Keyword::Join,
+                Keyword::Inner,
+                Keyword::Left,
+                Keyword::Right,
+                Keyword::Full,
+                Keyword::Cross,
+                Keyword::Natural,
+                Keyword::Global,
+                Keyword::Any,
+                Keyword::All,
+                Keyword::Asof,
+                Keyword::Semi,
+                Keyword::Anti,
+                Keyword::Array,
+            ]
+            .iter(),
+        )
+        .any(|&keyword| p.nth_keyword(1, keyword));
+    matches!(
+        p.nth(1),
+        SyntaxKind::BareWord
+            | SyntaxKind::QuotedIdentifier
+            | SyntaxKind::Number
+            | SyntaxKind::StringToken
+            | SyntaxKind::PlaceholderToken
+            | SyntaxKind::OpeningCurlyBrace
+    ) && !at_keyword_operator(p, 1)
+        && !next_is_clause
 }
 
 // ========== GROUP BY ==========

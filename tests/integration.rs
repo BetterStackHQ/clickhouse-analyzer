@@ -2619,6 +2619,11 @@ fn join_using_bare_list_boundaries() {
         "SELECT * FROM a JOIN b USING x, y; SELECT 1",
         "SELECT * FROM a JOIN b USING x, /* next key */ y",
         "SELECT * FROM a JOIN b USING x, tuple(y, z)",
+        "SELECT * FROM a JOIN b USING x, where",
+        "SELECT * FROM a JOIN b USING x, order, join",
+        "SELECT * FROM a JOIN b USING x, where = 1",
+        "SELECT * FROM a JOIN b USING x, where ORDER BY x",
+        "SELECT * FROM a JOIN b USING x, where LEFT JOIN c USING z",
     ] {
         let result = parse(input);
         assert!(result.errors.is_empty(), "{input}: {:?}", result.errors);
@@ -2641,6 +2646,63 @@ fn join_using_bare_list_requires_item_after_comma() {
         );
         assert_eq!(collect_text(&result.tree, &result.source), input);
     }
+}
+
+#[test]
+fn join_using_missing_item_preserves_following_clauses() {
+    for (suffix, kind) in [
+        ("WHERE x > 0", SyntaxKind::WhereClause),
+        ("ORDER BY x", SyntaxKind::OrderByClause),
+        ("GROUP BY x", SyntaxKind::GroupByClause),
+        ("JOIN c USING z", SyntaxKind::JoinClause),
+    ] {
+        let input = format!("SELECT * FROM a JOIN b USING x, {suffix}");
+        let result = parse(&input);
+        assert!(!result.errors.is_empty(), "Missing USING item: {input}");
+        let statement = result
+            .tree
+            .children
+            .iter()
+            .find_map(|child| child.get_tree_with_kind(SyntaxKind::SelectStatement))
+            .unwrap();
+        let following = statement
+            .children
+            .iter()
+            .filter_map(|child| child.get_tree_with_kind(kind))
+            .any(|node| result.source[node.start as usize..node.end as usize].trim() == suffix);
+        assert!(following, "Following clause must survive recovery: {input}");
+        assert_eq!(collect_text(&result.tree, &result.source), input);
+    }
+}
+
+#[test]
+fn join_using_missing_item_preserves_subquery_end() {
+    let input = "SELECT * FROM (SELECT * FROM a JOIN b USING x,) AS q";
+    let result = parse(input);
+    assert_eq!(
+        result.errors.len(),
+        1,
+        "Only the missing USING item should fail: {:?}",
+        result.errors
+    );
+    assert_eq!(collect_text(&result.tree, &result.source), input);
+    let statement = result
+        .tree
+        .children
+        .iter()
+        .find_map(|child| child.get_tree_with_kind(SyntaxKind::SelectStatement))
+        .unwrap();
+    let from = statement
+        .children
+        .iter()
+        .find_map(|child| child.get_tree_with_kind(SyntaxKind::FromClause))
+        .unwrap();
+    assert!(
+        from.children
+            .iter()
+            .any(|child| child.get_tree_with_kind(SyntaxKind::TableAlias).is_some()),
+        "The outer alias must survive recovery"
+    );
 }
 
 #[test]

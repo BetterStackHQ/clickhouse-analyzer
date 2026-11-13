@@ -1,9 +1,14 @@
 import type { SyntaxKind } from "./syntax-kind.js";
 import type { RawChild, RawParseResult, RawTree } from "./types.js";
 
+const encoder = new TextEncoder();
+// Preserve a literal BOM when decoding a source range that starts with one.
+const decoder = new TextDecoder("utf-8", { ignoreBOM: true });
+
 /**
  * A syntax node in the parsed tree. Wraps either a tree node or a token,
  * providing uniform navigation and text extraction.
+ * start/end are UTF-8 byte offsets into the original source.
  */
 export class SyntaxNode {
     readonly kind: SyntaxKind;
@@ -11,7 +16,7 @@ export class SyntaxNode {
     readonly end: number;
     readonly children: SyntaxNode[];
     readonly isToken: boolean;
-    private readonly _source: string;
+    private readonly _sourceBytes: Uint8Array;
     /** Parent reference, set during tree construction. */
     parent: SyntaxNode | null = null;
 
@@ -22,18 +27,19 @@ export class SyntaxNode {
         children: SyntaxNode[],
         isToken: boolean,
         source: string,
+        sourceBytes?: Uint8Array,
     ) {
         this.kind = kind;
         this.start = start;
         this.end = end;
         this.children = children;
         this.isToken = isToken;
-        this._source = source;
+        this._sourceBytes = sourceBytes ?? encoder.encode(source);
     }
 
     /** Get the source text this node spans. */
     text(): string {
-        return this._source.slice(this.start, this.end);
+        return decoder.decode(this._sourceBytes.subarray(this.start, this.end));
     }
 
     /** Find all descendant nodes matching the given kind. */
@@ -156,6 +162,8 @@ export class SyntaxError {
 
 /** Build a SyntaxNode tree from the raw JSON structure. */
 function buildNode(raw: RawTree, source: string, parent: SyntaxNode | null): SyntaxNode {
+    // All nodes share one encoding of the source; their ranges are byte-based.
+    const sourceBytes = encoder.encode(source);
     const root = new SyntaxNode(
         raw.kind,
         raw.start,
@@ -163,6 +171,7 @@ function buildNode(raw: RawTree, source: string, parent: SyntaxNode | null): Syn
         [],
         false,
         source,
+        sourceBytes,
     );
     root.parent = parent;
 
@@ -181,6 +190,7 @@ function buildNode(raw: RawTree, source: string, parent: SyntaxNode | null): Syn
                     [],
                     true,
                     source,
+                    sourceBytes,
                 );
                 tokenNode.parent = parentNode;
                 parentNode.children.push(tokenNode);
@@ -193,6 +203,7 @@ function buildNode(raw: RawTree, source: string, parent: SyntaxNode | null): Syn
                     [],
                     false,
                     source,
+                    sourceBytes,
                 );
                 node.parent = parentNode;
                 parentNode.children.push(node);

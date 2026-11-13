@@ -180,6 +180,69 @@ describe("SyntaxNode", () => {
 });
 
 // ---------------------------------------------------------------------------
+// UTF-8 source ranges
+// ---------------------------------------------------------------------------
+
+describe("UTF-8 source ranges", () => {
+    for (const value of ["é", "漢", "😀", "e\u0301"]) {
+        it(`extracts text after ${JSON.stringify(value)} without changing byte offsets`, () => {
+            const sql = `SELECT '${value}' FROM customers`;
+            const result = parse(sql);
+            assert.equal(result.ok, true);
+            assert.deepEqual(extractTableNames(result), ["customers"]);
+            assert.equal(result.findFirst(SyntaxKind.StringLiteral)?.text().trim(), `'${value}'`);
+
+            const table = result.findFirst(SyntaxKind.TableIdentifier);
+            assert.ok(table);
+            assert.equal(table.text().trim(), "customers");
+            const start = new TextEncoder().encode(sql.slice(0, sql.indexOf("customers"))).length;
+            assert.equal(table.start, start);
+            assert.equal(table.end, new TextEncoder().encode(sql).length);
+        });
+    }
+
+    it("extracts Unicode identifiers, function names and arguments", () => {
+        const result = parse("SELECT 'é', sum(`金额`) FROM `客户` WHERE `状态` = '😀'");
+        assert.equal(result.ok, true);
+        assert.deepEqual(extractTableNames(result), ["`客户`"]);
+        assert.deepEqual(extractColumnReferences(result), ["`金额`", "`状态`"]);
+        assert.deepEqual(extractFunctionCalls(result), [{ name: "sum", args: ["`金额`"] }]);
+    });
+
+    it("preserves Unicode source in the root and every token, including a leading BOM", () => {
+        for (const prefix of ["", "\uFEFF"]) {
+            const sql = `${prefix}-- café 😀\nSELECT 'e\u0301', '漢' FROM \`客户\``;
+            const result = parse(sql);
+            assert.equal(result.source, sql);
+            assert.equal(result.tree.text(), sql);
+            assert.equal(result.findFirst(SyntaxKind.Comment)?.text(), "-- café 😀");
+            const tokens: string[] = [];
+            result.tree.walk((node) => {
+                if (node.isToken) tokens.push(node.text());
+            });
+            assert.equal(tokens.join(""), sql);
+        }
+    });
+
+    it("supports byte ranges on directly constructed nodes", () => {
+        const node = new SyntaxNode(SyntaxKind.StringToken, 7, 11, [], true, "SELECT 'é', 1");
+        assert.equal(node.text(), "'é'");
+        assert.equal(node.start, 7);
+        assert.equal(node.end, 11);
+    });
+
+    it("keeps diagnostic ranges in bytes after Unicode text", () => {
+        const sql = "SELECT 'é', (1 + 2";
+        const result = parse(sql);
+        const missingParen = result.errors.find((error) => error.message === "expected )");
+        assert.ok(missingParen);
+        const end = new TextEncoder().encode(sql).length;
+        assert.equal(missingParen.start, end);
+        assert.equal(missingParen.end, end);
+    });
+});
+
+// ---------------------------------------------------------------------------
 // extractTableNames
 // ---------------------------------------------------------------------------
 
